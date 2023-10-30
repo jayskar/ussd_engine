@@ -27,6 +27,9 @@ from simplekv.fs import FilesystemStore
 from ussd.session_store import SessionStore
 from marshmallow.schema import SchemaMeta
 
+from rest_framework.serializers import SerializerMetaclass
+from rest_framework.views import APIView
+
 _registered_ussd_handlers = {}
 _registered_filters = {}
 _customer_journey_files = []
