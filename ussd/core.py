@@ -9,6 +9,7 @@ import typing
 from collections import namedtuple
 from copy import copy
 import datetime
+from importlib import import_module
 from urllib.parse import unquote
 
 import requests
@@ -62,6 +63,49 @@ def register_function(func_name, *args, **kwargs):
     function_name = func_name.__name__
     _built_in_functions[function_name] = func_name
 
+
+def get_session_engine():
+    session_engine = import_module(getattr(settings, "USSD_SESSION_ENGINE",
+                                           settings.SESSION_ENGINE))
+    if session_engine is signed_cookies:
+        raise ValueError("You cannot use channels session "
+                         "functionality with signed cookie sessions!")
+    return session_engine
+
+def ussd_session(session_id):
+    session = get_session_engine().SessionStore(session_key=session_id)
+    session._session.keys()
+    session._session_key = session_id
+
+    # If the session does not already exist, save to force our
+    # session key to be valid.
+    if not session.exists(session.session_key):
+        try:
+            session.save(must_create=True)
+        except CreateError:
+            # Session wasn't unique, so another consumer is doing the same thing
+            raise DuplicateSessionId("another sever is working"
+                                     "on this session id")
+    return session
+
+def generate_session_id():
+    session_store = get_session_engine().SessionStore()
+    session_store.save()  # generate session_key
+    return session_store.session_key
+
+def load_yaml(file_path, namespace):
+    file_path = Template(file_path).render(os.environ)
+
+    yaml_dict = Configuration.from_file(
+            os.path.abspath(file_path),
+            multi_constructors={'!include': utilities.include},
+            configure=False
+        )
+
+    staticconf.DictConfiguration(
+        yaml_dict,
+        namespace=namespace,
+        flatten=False)
 
 class UssdRequest(object):
     """
