@@ -12,6 +12,7 @@ import datetime
 from urllib.parse import unquote
 
 import requests
+import staticconf
 from jinja2 import Environment
 from structlog import get_logger
 
