@@ -40,7 +40,7 @@ with open(path.join(this_directory, 'README.md'), encoding='utf-8') as f:
 
 setup(
     name='ussd_airflow_engine',
-    version="0.0.3.dev1",
+    version="0.0.4.dev1",
     packages=find_packages(exclude=('ussd_airflow',)),
     url='https://github.com/ussd-airflow/ussd_engine',
     install_requires=reqs('default.txt'),

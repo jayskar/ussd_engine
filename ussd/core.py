@@ -251,6 +251,16 @@ class UssdResponse(object):
         return self.dumps()
 
 
+class UssdViewMetaClass(type):
+    def __init__(cls, name, bases, attr, **kwargs):
+        super(UssdViewMetaClass, cls).__init__(
+            name, bases, attr)
+        path = getattr(cls, 'customer_journey_conf')
+        if path is not None:
+            _customer_journey_files.append(getattr(cls, 'customer_journey_conf'))
+
+
+
 class UssdHandlerMetaClass(type):
 
     def __init__(cls, name, bases, attr, **kwargs):
