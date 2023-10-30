@@ -614,6 +614,320 @@ class UssdHandlerAbstract(object, metaclass=UssdHandlerMetaClass):
 NextScreens = namedtuple("NextScreens", "next_screens links")
 
 
+class UssdView(APIView, metaclass=UssdViewMetaClass):
+    """
+    To create Ussd View requires the following things:
+        - Inherit from **UssdView** (Mandatory)
+            .. code-block:: python
+
+                from ussd.core import UssdView
+
+        - Define Http method either **get** or **post** (Mandatory)
+            The http method should return Ussd Request
+
+                .. autoclass:: ussd.core.UssdRequest
+
+        - define this varialbe *customer_journey_conf*
+            This is the path of the file that has ussd screens
+            If you want your file to be dynamic implement the
+            following method **get_customer_journey_conf** it
+            will be called by request object
+
+        - define this variable *customer_journey_namespace*
+            Ussd_airflow uses this namespace to save the
+            customer journey content in memory. If you want
+            customer_journey_namespace to be dynamic implement
+            this method **get_customer_journey_namespace** it
+            will be called with request object
+
+        - override HttpResponse
+            In ussd airflow the http method return UssdRequest object
+            not Http response. Then ussd view gets UssdResponse object
+            and convert it to HttpResponse. The default HttpResponse
+            returned is a normal HttpResponse with body being ussd text
+
+            To override HttpResponse returned define this method.
+            **ussd_response_handler** it will be called with
+            **UssdResponse** object.
+
+                .. autoclass:: ussd.core.UssdResponse
+
+    Example of Ussd view
+
+    .. code-block:: python
+
+        from ussd.core import UssdView, UssdRequest
+
+
+        class SampleOne(UssdView):
+
+            def get(self, req):
+                return UssdRequest(
+                    phone_number=req.data['phoneNumber'].strip('+'),
+                    session_id=req.data['sessionId'],
+                    ussd_input=text,
+                    service_code=req.data['serviceCode'],
+                    language=req.data.get('language', 'en')
+                )
+
+    Example of Ussd View that defines its own HttpResponse.
+
+    .. code-block:: python
+
+        from ussd.core import UssdView, UssdRequest
+
+
+        class SampleOne(UssdView):
+
+            def get(self, req):
+                return UssdRequest(
+                    phone_number=req.data['phoneNumber'].strip('+'),
+                    session_id=req.data['sessionId'],
+                    ussd_input=text,
+                    service_code=req.data['serviceCode'],
+                    language=req.data.get('language', 'en')
+                )
+
+            def ussd_response_handler(self, ussd_response):
+                    if ussd_response.status:
+                        res = 'CON' + ' ' + str(ussd_response)
+                        response = HttpResponse(res)
+                    else:
+                        res = 'END' + ' ' + str(ussd_response)
+                        response = HttpResponse(res)
+                    return response
+    """
+    customer_journey_conf = None
+    customer_journey_namespace = None
+
+    def initial(self, request, *args, **kwargs):
+        # initialize restframework
+        super(UssdView, self).initial(request, args, kwargs)
+
+        # initialize ussd
+        self.ussd_initial(request)
+
+    def ussd_initial(self, request, *args, **kwargs):
+        if hasattr(self, 'get_customer_journey_conf'):
+            self.customer_journey_conf = self.get_customer_journey_conf(
+                request
+            )
+        if hasattr(self, 'get_customer_journey_namespace'):
+            self.customer_journey_namespace = \
+                self.get_customer_journey_namespace(request)
+
+        if self.customer_journey_conf is None \
+                or self.customer_journey_namespace is None:
+            raise MissingAttribute("attribute customer_journey_conf and "
+                                   "customer_journey_namespace are required")
+
+        if not self.customer_journey_namespace in \
+               staticconf.config.configuration_namespaces:
+            load_yaml(
+                self.customer_journey_conf,
+                self.customer_journey_namespace
+            )
+
+        # confirm variable template has been loaded
+        # get initial screen
+
+        initial_screen = staticconf.read(
+            "initial_screen",
+            namespace=self.customer_journey_namespace)
+
+        if isinstance(initial_screen, dict) and \
+                initial_screen.get('variables'):
+            variable_conf = initial_screen['variables']
+            file_path = variable_conf['file']
+            namespace = variable_conf['namespace']
+            if not namespace in \
+                   staticconf.config.configuration_namespaces:
+                load_yaml(file_path, namespace)
+
+        self.initial_screen = initial_screen \
+            if isinstance(initial_screen, dict) \
+            else {"initial_screen": initial_screen}
+
+    def finalize_response(self, request, response, *args, **kwargs):
+
+        if isinstance(response, UssdRequest):
+            self.logger = get_logger(__name__).bind(**response.all_variables())
+            try:
+                ussd_response = self.ussd_dispatcher(response)
+            except Exception as e:
+                if settings.DEBUG:
+                    ussd_response = UssdResponse(str(e))
+            return self.ussd_response_handler(ussd_response)
+        return super(UssdView, self).finalize_response(
+            request, response, args, kwargs)
+
+    def ussd_response_handler(self, ussd_response):
+        return HttpResponse(str(ussd_response))
+
+    def ussd_dispatcher(self, ussd_request):
+
+        # Clear input and initialize session if we are starting up
+        if '_ussd_state' not in ussd_request.session:
+            ussd_request.input = ''
+            ussd_request.session['_ussd_state'] = {'next_screen': ''}
+            ussd_request.session['ussd_interaction'] = []
+            ussd_request.session['posted'] = False
+            ussd_request.session['submit_data'] = {}
+            ussd_request.session['session_id'] = ussd_request.session_id
+            ussd_request.session['phone_number'] = ussd_request.phone_number
+
+        # update ussd_request variable to session and template variables
+        # to be used later for jinja2 evaluation
+        ussd_request.session.update(ussd_request.all_variables())
+
+        # for backward compatibility
+        # there are some jinja template using ussd_request
+        # eg. {{ussd_request.session_id}}
+        ussd_request.session.update(
+            {"ussd_request": ussd_request.all_variables()}
+        )
+
+        self.logger.debug('gateway_request', text=ussd_request.input)
+
+        # Invoke handlers
+        ussd_response = self.run_handlers(ussd_request)
+        ussd_request.session[ussd_airflow_variables.last_update] = \
+            utilities.datetime_to_string(datetime.now())
+        # Save session
+        ussd_request.session.save()
+        self.logger.debug('gateway_response', text=ussd_response.dumps(),
+                          input="{redacted}")
+
+        return ussd_response
+
+    def run_handlers(self, ussd_request):
+
+        handler = ussd_request.session['_ussd_state']['next_screen'] \
+            if ussd_request.session.get('_ussd_state', {}).get('next_screen') \
+            else "initial_screen"
+
+        ussd_response = (ussd_request, handler)
+
+        if handler != "initial_screen":
+            # get start time
+            start_time = utilities.string_to_datetime(
+                ussd_request.session["ussd_interaction"][-1]["start_time"])
+            end_time = datetime.now()
+            # Report in milliseconds
+            duration = (end_time - start_time).total_seconds() * 1000
+            ussd_request.session["ussd_interaction"][-1].update(
+                {
+                    "input": ussd_request.input,
+                    "end_time": utilities.datetime_to_string(end_time),
+                    "duration": duration
+                }
+            )
+
+        # Handle any forwarded Requests; loop until a Response is
+        # eventually returned.
+        while not isinstance(ussd_response, UssdResponse):
+            ussd_request, handler = ussd_response
+
+            screen_content = staticconf.read(
+                handler,
+                namespace=self.customer_journey_namespace)
+
+            screen_type = 'initial_screen' \
+                if handler == "initial_screen" and \
+                   isinstance(screen_content, str) \
+                else screen_content['type']
+
+            ussd_response = _registered_ussd_handlers[screen_type](
+                ussd_request,
+                handler,
+                screen_content,
+                initial_screen=self.initial_screen,
+                logger=self.logger
+            ).handle()
+
+        ussd_request.session['_ussd_state']['next_screen'] = handler
+
+        ussd_request.session['ussd_interaction'].append(
+            {
+                "screen_name": handler,
+                "screen_text": str(ussd_response),
+                "input": ussd_request.input,
+                "start_time": utilities.datetime_to_string(datetime.now())
+            }
+        )
+        # Attach session to outgoing response
+        ussd_response.session = ussd_request.session
+
+        return ussd_response
+
+    @staticmethod
+    def validate_ussd_journey(ussd_content: dict) -> (bool, dict):
+        errors = {}
+        is_valid = True
+
+        # should define initial screen
+        if not 'initial_screen' in ussd_content.keys():
+            is_valid = False
+            errors.update(
+                {'hidden_fields': {
+                    "initial_screen": ["This field is required."]
+                }}
+            )
+        for screen_name, screen_content in ussd_content.items():
+            # all screens should have type attribute
+            if screen_name == "initial_screen" and \
+                    isinstance(screen_content, str):
+                if not screen_content in ussd_content.keys():
+                    is_valid = False
+                    errors.update(
+                        dict(
+                            screen_name="Screen not available"
+                        )
+                    )
+                continue
+
+            screen_type = screen_content.get('type')
+
+            # all screen should have type field.
+            serialize = UssdBaseSerializer(data=screen_content,
+                                           context=ussd_content)
+            base_validation = serialize.is_valid()
+
+            if serialize.errors:
+                errors.update(
+                    {screen_name: serialize.errors}
+                )
+
+            if not base_validation:
+                is_valid = False
+                continue
+
+            # all screen type have their handlers
+            handlers = _registered_ussd_handlers[screen_type]
+
+            screen_validation, screen_errors = handlers.validate(
+                screen_name,
+                ussd_content
+            )
+            if screen_errors:
+                errors.update(
+                    {screen_name: screen_errors}
+                )
+
+            if not screen_validation:
+                is_valid = screen_validation
+
+        return is_valid, errors
+
+    @staticmethod
+    def get_initial_screen(ussd_content: dict):
+        initial_screen = ussd_content['initial_screen']
+        return initial_screen if isinstance(initial_screen, dict) \
+            else {"initial_screen": initial_screen}
+
+
+
+
 class UssdEngine(object):
 
     def __init__(self, ussd_request: UssdRequest):
