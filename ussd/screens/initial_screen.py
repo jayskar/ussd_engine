@@ -28,8 +28,8 @@ class UssdReportSessionSchema(Schema):
 
 class InitialScreenSchema(UssdBaseScreenSchema, NextUssdScreenSchema):
     variables = fields.Nested(VariableDefinitionSchema, required=False)
-    create_ussd_variables = fields.Dict(default={}, required=False)
-    default_language = fields.Str(required=False, default="en")
+    create_ussd_variables = fields.Dict(load_default={}, dump_default={}, required=False)
+    default_language = fields.Str(required=False, load_default="en", dump_default="en")
     ussd_report_session = fields.Nested(UssdReportSessionSchema, required=False)
     pagination_config = fields.Nested(PaginationConfigSchema, required=False)
 
