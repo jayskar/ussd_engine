@@ -58,7 +58,7 @@ class WithDictSchema(Schema):
     with_dict = WithDictField(required=False, load_default=None)
 
 class PaginationConfigSchema(Schema):
-    ussd_text_limit = fields.Integer(required=False, default=180)
+    ussd_text_limit = fields.Integer(required=False, load_default=180)
     more_option = UssdTextField(required=False)
     back_option = UssdTextField(required=False)
 
