@@ -51,7 +51,7 @@ class MenuSchema(Schema):
 
 
 class WithItemSchema(Schema):
-    with_items = WithItemField(required=False, default=None)
+    with_items = WithItemField(required=False, load_default=None)
 
 
 class WithDictSchema(Schema):
