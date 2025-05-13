@@ -47,3 +47,20 @@ def strip(strftime, strptime):
         strftime,
         strptime
     )
+
+# datetime filter to format %Y-%m-%d %I%p
+@register_filter
+def strftime_filter(value, format='%Y-%m-%d %I%p'):
+    """
+    Format a datetime object or string to the specified format.
+    """
+    if isinstance(value, datetime):
+        return value.strftime(format)
+    elif isinstance(value, str):
+        # Attempt to parse string to datetime
+        try:
+            dt = datetime.strptime(value, '%Y-%m-%d %H:%M:%S')
+            return dt.strftime(format)
+        except ValueError:
+            return value  # Return original value if parsing fails
+    return value  # Return unchanged if not a datetime or parseable string
